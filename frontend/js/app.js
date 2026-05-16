@@ -13,6 +13,7 @@
     var $$ = function(s) { return document.querySelectorAll(s); };
 
     var fInp = $('#fromInput'), tInp = $('#toInput'), dInp = $('#dateInput');
+    var pInp = $('#passengerInput');
     var sBtn = $('#searchBtn'), cBtn = $('#cancelBtn'), swBtn = $('#swapBtn');
     var stat = $('#statusBar'), res = $('#results'), filt = $('#filterRow');
     var fSug = $('#fromSuggestions'), tSug = $('#toSuggestions');
@@ -93,6 +94,7 @@
 
         var from = fInp.value.trim(), to = tInp.value.trim(), date = dInp.value;
         var sortBy = (document.querySelector('input[name="sort"]:checked') || {}).value || 'price';
+        var passengers = parseInt(pInp.value) || 1;
 
         setL(true); statMsg('正在查询直达车次... <small>(可点取消)</small>', 'loading');
         res.innerHTML = skel(3);
@@ -105,7 +107,7 @@
             var r1 = await fetch(API + '/api/search', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ from: from, to: to, date: date, sort_by: sortBy, type: 'direct' }),
+                body: JSON.stringify({ from: from, to: to, date: date, sort_by: sortBy, type: 'direct', passengers: passengers }),
                 signal: sCtrl.signal,
             });
             dirData = await r1.json();
@@ -120,8 +122,9 @@
         renderResults({ direct: dirData.direct || [], transfers: [] });
         var hasDir = dirData.direct && dirData.direct.length > 0;
 
+        var prioLabel = sortBy === 'price' ? '最低价' : '最快速';
         if (hasDir) {
-            statMsg('找到 ' + dirData.direct.length + ' 趟直达 | 正在获取票价...', 'success');
+            statMsg('找到 ' + dirData.direct.length + ' 趟直达（' + passengers + '人 / ' + prioLabel + '优先）| 正在获取票价...', 'success');
             fetchP(dirData.direct, date);
         } else {
             statMsg('未找到直达车次，正在搜索中转方案...', 'loading');
@@ -134,7 +137,7 @@
             var r2 = await fetch(API + '/api/search', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ from: from, to: to, date: date, sort_by: sortBy, type: 'transfer' }),
+                body: JSON.stringify({ from: from, to: to, date: date, sort_by: sortBy, type: 'transfer', passengers: passengers }),
                 signal: trCtrl.signal,
             });
             trData = await r2.json();
@@ -307,7 +310,7 @@
 
     function skel(n) { return Array(n).fill(0).map(function() { return '<div class="skeleton"><div class="skeleton-line" style="width:40%;"></div><div class="skeleton-line" style="width:70%;"></div><div class="skeleton-line"></div></div>'; }).join(''); }
     function statMsg(msg, type) { stat.innerHTML = '<div class="status-msg ' + type + '">' + msg + '</div>'; }
-    function setL(on) { sBtn.style.display = on ? 'none' : ''; cBtn.style.display = on ? '' : 'none'; sBtn.disabled = on; fInp.disabled = on; tInp.disabled = on; dInp.disabled = on; }
+    function setL(on) { sBtn.style.display = on ? 'none' : ''; cBtn.style.display = on ? '' : 'none'; sBtn.disabled = on; fInp.disabled = on; tInp.disabled = on; dInp.disabled = on; pInp.disabled = on; }
 
     function saveH(q) {
         try { var h = JSON.parse(localStorage.getItem(HK) || '[]'); h = h.filter(function(x) { return !(x.from === q.from && x.to === q.to); }); h.unshift(q); localStorage.setItem(HK, JSON.stringify(h.slice(0, MAXH))); loadH(); } catch (e) {}

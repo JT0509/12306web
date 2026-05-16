@@ -103,6 +103,23 @@ body {
     color: #9aa0a6;
 }
 .date-group { max-width: 160px; flex: none; }
+.passenger-group { max-width: 110px; flex: none; }
+.passenger-group select {
+    width: 100%;
+    padding: 10px 8px;
+    border: 1.5px solid var(--border);
+    border-radius: var(--radius-sm);
+    font-size: 15px;
+    color: var(--text);
+    outline: none;
+    background: var(--card);
+    cursor: pointer;
+    transition: border-color 0.2s;
+}
+.passenger-group select:focus {
+    border-color: var(--primary);
+    box-shadow: 0 0 0 3px rgba(26,115,232,0.12);
+}
 .swap-btn {
     margin-top: 22px;
     width: 40px;

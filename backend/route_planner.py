@@ -15,7 +15,7 @@ HUB_STATIONS = [
 ]
 
 
-def find_transfers(from_code: str, to_code: str, date: str) -> list[dict]:
+def find_transfers(from_code: str, to_code: str, date: str, passenger_count: int = 1) -> list[dict]:
     """查找中转方案，枚举枢纽站拼接两段直达."""
     results = []
 
@@ -24,8 +24,8 @@ def find_transfers(from_code: str, to_code: str, date: str) -> list[dict]:
             continue
 
         try:
-            leg1 = query_direct_trains(from_code, hub, date)
-            leg2 = query_direct_trains(hub, to_code, date)
+            leg1 = query_direct_trains(from_code, hub, date, passenger_count)
+            leg2 = query_direct_trains(hub, to_code, date, passenger_count)
         except Exception:
             continue
 

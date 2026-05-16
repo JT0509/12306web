@@ -39,14 +39,28 @@
                         <label for="dateInput">出发日期</label>
                         <input type="date" id="dateInput">
                     </div>
+                    <div class="input-group passenger-group">
+                        <label for="passengerInput">乘车人数</label>
+                        <select id="passengerInput">
+                            <option value="1">1人</option>
+                            <option value="2">2人</option>
+                            <option value="3">3人</option>
+                            <option value="4">4人</option>
+                            <option value="5">5人</option>
+                            <option value="6">6人</option>
+                            <option value="7">7人</option>
+                            <option value="8">8人</option>
+                            <option value="9">9人</option>
+                            <option value="10">10人</option>
+                        </select>
+                    </div>
                 </div>
 
                 <div class="search-actions">
                     <div class="sort-options">
-                        <span class="sort-label">排序:</span>
-                        <label class="sort-radio"><input type="radio" name="sort" value="price" checked> 价格</label>
-                        <label class="sort-radio"><input type="radio" name="sort" value="duration"> 耗时</label>
-                        <label class="sort-radio"><input type="radio" name="sort" value="departure"> 出发时间</label>
+                        <span class="sort-label">优先:</span>
+                        <label class="sort-radio"><input type="radio" name="sort" value="price" checked> 💰 最低价</label>
+                        <label class="sort-radio"><input type="radio" name="sort" value="duration"> ⚡ 最快速</label>
                     </div>
                     <button class="search-btn" id="searchBtn">🔍 查询</button>
                     <button class="cancel-btn" id="cancelBtn" style="display:none;">✕ 取消</button>

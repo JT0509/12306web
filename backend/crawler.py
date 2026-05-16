@@ -170,8 +170,8 @@ def _query_prices(
     return prices
 
 
-def _parse_train_info(entry: str, date: str) -> Optional[dict]:
-    """解析单条车次数据，过滤全售罄车次（不查价格，快速返回）."""
+def _parse_train_info(entry: str, date: str, passenger_count: int = 1) -> Optional[dict]:
+    """解析单条车次数据，过滤全售罄及余票不足车次."""
     parts = entry.split("|")
     if len(parts) < 35:
         return None
@@ -193,13 +193,19 @@ def _parse_train_info(entry: str, date: str) -> Optional[dict]:
     seat_codes = _parse_seat_types(seat_types_str)
     avail_index = HIGH_SPEED_AVAIL_INDEX if is_high_speed else NORMAL_AVAIL_INDEX
 
+    # 检查余票是否满足乘车人数
     available_codes = []
     for code in seat_codes:
         idx = avail_index.get(code)
         if idx is not None and idx < len(parts):
             val = parts[idx]
-            if val and val != "" and val != "无":
-                available_codes.append(code)
+            if not val or val == "" or val == "无":
+                continue  # 无票
+            if val == "有":
+                available_codes.append(code)  # 余票充足
+            elif val.isdigit() and int(val) >= passenger_count:
+                available_codes.append(code)  # 余票 >= 人数
+            # 否则余票不足，跳过
 
     if not available_codes:
         return None
@@ -259,9 +265,9 @@ def query_ticket_price(
 
 
 def query_direct_trains(
-    from_code: str, to_code: str, date: str
+    from_code: str, to_code: str, date: str, passenger_count: int = 1
 ) -> list[dict]:
-    """查询直达车次，过滤全售罄，带真实票价."""
+    """查询直达车次，过滤全售罄和余票不足车次."""
     with _client() as client:
         client.get("https://kyfw.12306.cn/otn/leftTicket/init")
         time.sleep(random.uniform(0.5, 1.5))
@@ -283,7 +289,7 @@ def query_direct_trains(
 
         trains = []
         for entry in result:
-            info = _parse_train_info(entry, date)
+            info = _parse_train_info(entry, date, passenger_count)
             if info:
                 trains.append(info)
 

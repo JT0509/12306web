@@ -121,6 +121,7 @@ async def search(request: Request):
     to_name = str(body.get("to", "")).strip()
     date = str(body.get("date", "")).strip()
     sort_by = str(body.get("sort_by", "price")).strip()
+    passenger_count = int(body.get("passengers", 1) or 1)
 
     # 输入校验
     if not from_name or not to_name or not date:
@@ -137,7 +138,7 @@ async def search(request: Request):
         raise HTTPException(400, detail={"error": "日期格式错误"})
 
     # 缓存检查
-    cache_key = f"{from_name}|{to_name}|{date}|{sort_by}"
+    cache_key = f"{from_name}|{to_name}|{date}|{sort_by}|{passenger_count}|{query_type}"
     now = time.time()
     if cache_key in _cache:
         cached_time, cached_data = _cache[cache_key]
@@ -153,9 +154,9 @@ async def search(request: Request):
         raise HTTPException(400, detail={"error": f"未找到到达站「{to_name}」"})
 
     # 查询直达
-    logger.info(f"查询直达: {from_name}({from_code}) -> {to_name}({to_code}) 日期:{date}")
+    logger.info(f"查询直达: {from_name}({from_code}) -> {to_name}({to_code}) 日期:{date} {passenger_count}人")
     try:
-        direct = query_direct_trains(from_code, to_code, date)
+        direct = query_direct_trains(from_code, to_code, date, passenger_count)
     except RuntimeError as e:
         raise HTTPException(503, detail={"error": str(e)})
     except Exception as e:
@@ -167,7 +168,7 @@ async def search(request: Request):
     transfers = []
     if query_type in ("both", "transfer"):
         try:
-            transfers = find_transfers(from_code, to_code, date)
+            transfers = find_transfers(from_code, to_code, date, passenger_count)
         except Exception as e:
             logger.warning(f"中转查询失败: {e}")
 
