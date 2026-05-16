@@ -5,10 +5,72 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>12306 购票助手</title>
     <link rel="stylesheet" href="css/style.css">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self';">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' http://127.0.0.1:8765 http://localhost:8765;">
 </head>
 <body>
-    <div id="app"></div>
+    <div id="app">
+        <!-- 头部 -->
+        <header class="header">
+            <div class="header-inner">
+                <h1 class="logo">
+                    <span class="logo-icon">🚆</span> 12306 购票助手
+                </h1>
+                <p class="subtitle">直达 · 中转 · 比价 · 一键购票</p>
+            </div>
+        </header>
+
+        <!-- 主内容区 -->
+        <main class="main">
+            <!-- 搜索面板 -->
+            <section class="search-panel" id="searchPanel">
+                <div class="search-row">
+                    <div class="input-group">
+                        <label for="fromInput">出发站</label>
+                        <input type="text" id="fromInput" placeholder="输入城市或站名" autocomplete="off" maxlength="20">
+                        <ul class="suggestions" id="fromSuggestions"></ul>
+                    </div>
+                    <button class="swap-btn" id="swapBtn" title="交换出发/到达">🔄</button>
+                    <div class="input-group">
+                        <label for="toInput">到达站</label>
+                        <input type="text" id="toInput" placeholder="输入城市或站名" autocomplete="off" maxlength="20">
+                        <ul class="suggestions" id="toSuggestions"></ul>
+                    </div>
+                    <div class="input-group date-group">
+                        <label for="dateInput">出发日期</label>
+                        <input type="date" id="dateInput">
+                    </div>
+                </div>
+
+                <div class="search-actions">
+                    <div class="sort-options">
+                        <span class="sort-label">排序:</span>
+                        <label class="sort-radio"><input type="radio" name="sort" value="price" checked> 价格</label>
+                        <label class="sort-radio"><input type="radio" name="sort" value="duration"> 耗时</label>
+                        <label class="sort-radio"><input type="radio" name="sort" value="departure"> 出发时间</label>
+                    </div>
+                    <button class="search-btn" id="searchBtn">🔍 查询</button>
+                </div>
+
+                <div class="filter-row" id="filterRow" style="display:none;">
+                    <button class="filter-btn active" data-filter="all">全部</button>
+                    <button class="filter-btn" data-filter="direct">直达</button>
+                    <button class="filter-btn" data-filter="transfer">中转</button>
+                </div>
+            </section>
+
+            <!-- 状态提示 -->
+            <div class="status-bar" id="statusBar"></div>
+
+            <!-- 结果区域 -->
+            <section class="results" id="results"></section>
+        </main>
+
+        <!-- 页脚 -->
+        <footer class="footer">
+            <p>数据来源: 12306 官网 · 仅供查询参考，请以官网实际价格为准</p>
+        </footer>
+    </div>
+
     <script src="js/app.js"></script>
 </body>
 </html>
