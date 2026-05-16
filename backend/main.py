@@ -190,12 +190,23 @@ async def search(request: Request):
 
 
 @app.get("/api/train/{train_no}")
-async def train_detail(train_no: str, date: str = ""):
+async def train_detail(
+    train_no: str,
+    date: str = "",
+    from_code: str = "",
+    to_code: str = "",
+    internal_no: str = "",
+):
     """查询车次详情（经停站）."""
     if not date:
         raise HTTPException(400, detail={"error": "日期参数必填"})
     try:
-        detail = query_train_detail(train_no, date)
+        detail = query_train_detail(
+            train_no, date,
+            from_code=from_code,
+            to_code=to_code,
+            internal_no=internal_no,
+        )
     except Exception as e:
         logger.error(f"车次详情查询失败: {e}")
         raise HTTPException(503, detail={"error": "车次详情查询失败"})

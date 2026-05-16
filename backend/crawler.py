@@ -1,4 +1,4 @@
-"""12306 API 爬虫模块 — 负责站名映射、车次查询、详情查询."""
+"""12306 API 爬虫模块 — 负责站名映射、车次查询、详情查询、价格查询."""
 import httpx
 import re
 import time
@@ -16,8 +16,42 @@ STATION_NAME_URL = (
     "?station_version=1.9345"
 )
 
-_station_map: dict[str, str] = {}   # 站名 -> 代码
-_reverse_map: dict[str, str] = {}   # 代码 -> 站名
+PRICE_URL = "https://kyfw.12306.cn/otn/leftTicket/queryTicketPrice"
+QUERY_URL = "https://kyfw.12306.cn/otn/leftTicket/query"
+DETAIL_URL = "https://kyfw.12306.cn/otn/czxx/queryByTrainNo"
+
+# 12306 席别代码 → 中文名
+SEAT_CODE_NAMES = {
+    "9": "商务座",
+    "A9": "商务座",
+    "M": "一等座",
+    "O": "二等座",
+    "WZ": "无座",
+    "6": "动卧",
+    "4": "软卧",
+    "3": "硬卧",
+    "1": "硬座",
+}
+
+# 高铁/动车的席别代码 → 结果索引映射
+# 12306 结果数组中的固定索引位置
+HIGH_SPEED_AVAIL_INDEX = {
+    "WZ": 26,  # 无座
+    "O": 32,   # 二等座
+    "M": 31,   # 一等座
+    "9": 30,   # 商务座
+}
+
+# 普通列车
+NORMAL_AVAIL_INDEX = {
+    "WZ": 26,   # 无座
+    "1": 27,    # 硬座
+    "3": 29,    # 硬卧
+    "4": 30,    # 软卧
+}
+
+_station_map: dict[str, str] = {}
+_reverse_map: dict[str, str] = {}
 
 
 def _random_ua() -> str:
@@ -38,17 +72,13 @@ def _client() -> httpx.Client:
 
 
 def load_station_map() -> dict[str, str]:
-    """从 12306 加载站名 -> 电报码映射，带内存在缓存."""
     global _station_map, _reverse_map
     if _station_map:
         return _station_map
-
     with _client() as client:
         resp = client.get(STATION_NAME_URL)
         resp.raise_for_status()
         text = resp.text
-
-    # 格式: @bjb|北京北|VAP|beijingbei|bjb|0|0357|北京|||
     matches = re.findall(r"@[a-z]+\|([^\|]+)\|([A-Z]+)\|", text)
     _station_map = {name: code for name, code in matches}
     _reverse_map = {code: name for name, code in matches}
@@ -56,7 +86,6 @@ def load_station_map() -> dict[str, str]:
 
 
 def station_to_code(name: str) -> Optional[str]:
-    """站名 -> 电报码。支持模糊匹配."""
     m = load_station_map()
     if name in m:
         return m[name]
@@ -67,7 +96,6 @@ def station_to_code(name: str) -> Optional[str]:
 
 
 def code_to_station(code: str) -> Optional[str]:
-    """电报码 -> 站名."""
     rm = _reverse_map
     if not rm:
         load_station_map()
@@ -75,84 +103,170 @@ def code_to_station(code: str) -> Optional[str]:
     return rm.get(code)
 
 
-# ── 直达车次查询 ──────────────────────────────────────────────
+def _parse_seat_types(seat_types_str: str) -> list[str]:
+    """解析 seat_types 字段，提取席别代码列表."""
+    codes = []
+    i = 0
+    while i < len(seat_types_str):
+        if seat_types_str[i].isdigit():
+            codes.append(seat_types_str[i])
+            i += 1
+            while i < len(seat_types_str) and seat_types_str[i].isdigit():
+                i += 1
+        elif seat_types_str[i].isalpha():
+            code = ""
+            while i < len(seat_types_str) and seat_types_str[i].isalpha():
+                code += seat_types_str[i]
+                i += 1
+            codes.append(code)
+        else:
+            i += 1
+    return codes
 
-QUERY_URL = "https://kyfw.12306.cn/otn/leftTicket/query"
 
-# 席别映射: 索引 -> 席别名称
-SEAT_INDEX_MAP = {
-    26: "无座",
-    28: "硬座",
-    29: "硬卧",
-    30: "软卧",
-}
-
-HIGH_SPEED_SEAT_MAP = {
-    28: "二等座",
-    29: "一等座",
-    30: "商务座",
-}
-
-
-def _parse_train_info(entry: str, data_map: dict) -> dict:
-    """解析单条车次数据."""
-    parts = entry.split("|")
-    if len(parts) < 31:
+def _query_prices(
+    client: httpx.Client, train_no: str, from_no: str, to_no: str,
+    seat_types: str, date: str
+) -> dict[str, float]:
+    """查询票价，返回 {席别代码: 价格(元)}."""
+    try:
+        time.sleep(random.uniform(0.3, 0.8))
+        params = {
+            "train_no": train_no,
+            "from_station_no": from_no,
+            "to_station_no": to_no,
+            "seat_types": seat_types,
+            "train_date": date,
+        }
+        resp = client.get(PRICE_URL, params=params)
+        if resp.status_code != 200:
+            return {}
+        data = resp.json().get("data", {})
+    except Exception:
         return {}
 
-    train_code = parts[3]  # 显示车次，如 G1
+    prices = {}
+    # 解析每个席别代码对应的价格（单位：角，需 /10 转元）
+    for key, val in data.items():
+        if key in ("train_no", "OT"):
+            continue
+        if isinstance(val, str) and val.startswith("¥"):
+            try:
+                prices[key] = float(val.replace("¥", ""))
+            except ValueError:
+                pass
+        elif val and val.isdigit():
+            prices[key] = float(val) / 10.0
+    return prices
+
+
+def _parse_train_info(
+    entry: str, date: str, client: httpx.Client
+) -> Optional[dict]:
+    """解析单条车次数据，过滤全售罄车次，查询真实票价."""
+    parts = entry.split("|")
+    if len(parts) < 35:
+        return None
+
+    train_code = parts[3]
+    internal_no = parts[2]
     from_code = parts[6]
     to_code = parts[7]
     start_time = parts[8]
     arrive_time = parts[9]
-    duration_raw = parts[10]  # "04:28"
+    duration_raw = parts[10]
     from_station = code_to_station(from_code) or from_code
     to_station = code_to_station(to_code) or to_code
-
-    # 判断是否为高铁/动车
+    from_no = parts[16]
+    to_no = parts[17]
+    seat_types_str = parts[34]
     is_high_speed = train_code.startswith(("G", "D", "C"))
 
-    # 解析席别价格
-    seat_map = HIGH_SPEED_SEAT_MAP if is_high_speed else SEAT_INDEX_MAP
-    seats = []
-    for idx, name in seat_map.items():
-        price_str = parts[idx] if idx < len(parts) else ""
-        if price_str and price_str not in ("", "无", "*", "—"):
-            try:
-                price = float(price_str)
-                seats.append({"type": name, "price": price})
-            except ValueError:
-                seats.append({"type": name, "price": 0, "note": price_str})
-        else:
-            seats.append({"type": name, "sold_out": True})
+    # 解析席别列表
+    seat_codes = _parse_seat_types(seat_types_str)
+    avail_index = HIGH_SPEED_AVAIL_INDEX if is_high_speed else NORMAL_AVAIL_INDEX
 
-    # 时长格式化
+    # 检查哪些席别可用并归类
+    available_codes = []
+    for code in seat_codes:
+        idx = avail_index.get(code)
+        if idx is not None and idx < len(parts):
+            val = parts[idx]
+            if val and val != "" and val != "无":
+                available_codes.append(code)
+
+    if not available_codes:
+        return None  # 全部售罄，过滤掉
+
+    # 构造 seat_types 参数用于价格查询
+    price_seat_types = "".join(f"{c}0" for c in seat_codes) + "W0"
+
+    # 查询价格
+    price_map = _query_prices(
+        client, internal_no, from_no, to_no, price_seat_types, date
+    )
+
+    # 构造 seats 列表
+    seats = []
+    for code in seat_codes:
+        name = SEAT_CODE_NAMES.get(code, code)
+        idx = avail_index.get(code)
+        available = code in available_codes
+
+        if not available:
+            continue  # 跳过不可用席别
+
+        price = None
+        # 尝试匹配价格键
+        for pk, pv in price_map.items():
+            if pk == code or pk == f"A{code}":
+                price = pv
+                break
+        # 也检查 WZ 的特殊处理
+        if code == "WZ" and "WZ" in price_map:
+            price = price_map["WZ"]
+
+        if price is not None:
+            seats.append({"type": name, "price": round(price, 1)})
+        else:
+            # 有票但未获取到价格（可能查询失败），标记为"见官网"
+            seats.append({"type": name, "note": "见官网"})
+
     try:
         h, m = duration_raw.split(":")
         duration = f"{int(h)}h{int(m)}m"
     except (ValueError, AttributeError):
         duration = duration_raw
 
+    buy_link = (
+        "https://kyfw.12306.cn/otn/leftTicket/init?"
+        f"leftTicketDTO.train_date={date}"
+        f"&leftTicketDTO.from_station={from_code}"
+        f"&leftTicketDTO.to_station={to_code}"
+        "&purpose_codes=ADULT"
+    )
+
     return {
         "train_no": train_code,
-        "internal_no": parts[2],
+        "internal_no": internal_no,
         "from_station": from_station,
         "to_station": to_station,
+        "from_code": from_code,
+        "to_code": to_code,
         "depart_time": start_time,
         "arrive_time": arrive_time,
         "duration": duration,
         "seats": seats,
+        "buy_link": buy_link,
     }
 
 
 def query_direct_trains(
     from_code: str, to_code: str, date: str
 ) -> list[dict]:
-    """查询直达车次."""
+    """查询直达车次，过滤全售罄，带真实票价."""
     with _client() as client:
-        # 先访问 init 页面获取 Cookie
         client.get("https://kyfw.12306.cn/otn/leftTicket/init")
-
         time.sleep(random.uniform(0.5, 1.5))
 
         params = {
@@ -165,57 +279,75 @@ def query_direct_trains(
         resp.raise_for_status()
         data = resp.json()
 
-    if not data.get("status") and data.get("c_url"):
-        raise RuntimeError("12306 触发风控，需要验证")
+        if not data.get("status") and data.get("c_url"):
+            raise RuntimeError("12306 触发风控，需要验证")
 
-    result = data.get("data", {}).get("result", [])
-    data_map = data.get("data", {}).get("map", {})
+        result = data.get("data", {}).get("result", [])
 
-    trains = []
-    for entry in result:
-        info = _parse_train_info(entry, data_map)
-        if info:
-            # 附加购买链接
-            info["buy_link"] = (
-                "https://kyfw.12306.cn/otn/leftTicket/init?"
-                f"leftTicketDTO.train_date={date}"
-                f"&leftTicketDTO.from_station={from_code}"
-                f"&leftTicketDTO.to_station={to_code}"
-                "&purpose_codes=ADULT"
-            )
-            trains.append(info)
+        trains = []
+        for entry in result:
+            info = _parse_train_info(entry, date, client)
+            if info:
+                trains.append(info)
 
     return trains
 
 
-# ── 车次详情查询 ──────────────────────────────────────────────
+def query_train_detail(
+    train_no: str,
+    date: str,
+    from_code: str = "",
+    to_code: str = "",
+    internal_no: str = "",
+) -> dict:
+    """查询车次经停站详情."""
+    with _client() as client:
+        client.get("https://kyfw.12306.cn/otn/leftTicket/init")
+        time.sleep(random.uniform(0.3, 0.8))
 
-TRAIN_DETAIL_URL = "https://kyfw.12306.cn/otn/czxx/queryByTrainNo"
+        if not internal_no:
+            # 如果未提供内部编号，尝试搜索
+            load_station_map()
+            internal_no, fc, tc = _resolve_train_info(train_no, date, client)
+            if not from_code:
+                from_code = fc
+            if not to_code:
+                to_code = tc
+
+        params = {
+            "train_no": internal_no,
+            "from_station_telecode": from_code,
+            "to_station_telecode": to_code,
+            "depart_date": date,
+        }
+        resp = client.get(DETAIL_URL, params=params)
+        resp.raise_for_status()
+        data = resp.json()
+
+    raw_stations = data.get("data", {}).get("data", [])
+    route = []
+    for s in raw_stations:
+        route.append({
+            "station": s.get("station_name", ""),
+            "arrive": s.get("arrive_time", "—") or "—",
+            "depart": s.get("start_time", "—") or "—",
+        })
+
+    return {"train_no": train_no, "route": route}
 
 
 def _resolve_train_info(
     train_no: str, date: str, client: httpx.Client
 ) -> tuple[str, str, str]:
-    """Resolve a display train name to internal train_no and station telecodes
-    by searching common routes.  Returns (internal_train_no, from_code, to_code).
-    """
-    # Ensure station map is loaded
+    """搜索常用路线获取内部车次编号和电报码."""
     load_station_map()
 
-    # Common inter-city routes to search
     common_routes = [
-        ("北京", "上海虹桥"),
-        ("北京南", "上海虹桥"),
-        ("北京南", "上海"),
-        ("北京", "上海"),
-        ("北京南", "杭州东"),
-        ("北京南", "南京南"),
-        ("北京西", "广州南"),
-        ("北京西", "深圳北"),
-        ("上海虹桥", "北京南"),
-        ("上海虹桥", "广州南"),
-        ("上海虹桥", "深圳北"),
-        ("广州南", "深圳北"),
+        ("北京南", "上海虹桥"), ("北京南", "上海"),
+        ("北京", "上海"), ("北京", "上海虹桥"),
+        ("北京南", "杭州东"), ("北京南", "南京南"),
+        ("北京西", "广州南"), ("北京西", "深圳北"),
+        ("上海虹桥", "北京南"), ("广州南", "深圳北"),
     ]
 
     for from_name, to_name in common_routes:
@@ -241,56 +373,4 @@ def _resolve_train_info(
         except Exception:
             continue
 
-    raise ValueError(
-        f"无法解析车次 {train_no}。请尝试提供 from_station_telecode 和 "
-        f"to_station_telecode 参数。"
-    )
-
-
-def query_train_detail(
-    train_no: str,
-    date: str,
-    from_station_telecode: str = "",
-    to_station_telecode: str = "",
-) -> dict:
-    """查询车次经停站详情.
-
-    参数:
-        train_no: 车次显示名称，如 G1
-        date: 发车日期，格式 yyyy-MM-dd
-        from_station_telecode: 发站电报码，可选。如不提供则自动查找。
-        to_station_telecode: 到站电报码，可选。如不提供则自动查找。
-    """
-    with _client() as client:
-        # 访问 init 页面获取 Cookie
-        client.get("https://kyfw.12306.cn/otn/leftTicket/init")
-        time.sleep(random.uniform(0.3, 0.8))
-
-        internal_no = train_no
-
-        # 如果缺少电报码，尝试通过查询车次列表来解析
-        if not from_station_telecode or not to_station_telecode:
-            internal_no, from_station_telecode, to_station_telecode = (
-                _resolve_train_info(train_no, date, client)
-            )
-
-        params = {
-            "train_no": internal_no,
-            "from_station_telecode": from_station_telecode,
-            "to_station_telecode": to_station_telecode,
-            "depart_date": date,
-        }
-        resp = client.get(TRAIN_DETAIL_URL, params=params)
-        resp.raise_for_status()
-        data = resp.json()
-
-    raw_stations = data.get("data", {}).get("data", [])
-    route = []
-    for s in raw_stations:
-        route.append({
-            "station": s.get("station_name", ""),
-            "arrive": s.get("arrive_time", "—") or "—",
-            "depart": s.get("start_time", "—") or "—",
-        })
-
-    return {"train_no": train_no, "route": route}
+    raise ValueError(f"无法解析车次 {train_no}，请提供 from_code/to_code 参数")

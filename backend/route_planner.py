@@ -72,8 +72,11 @@ def find_transfers(from_code: str, to_code: str, date: str) -> list[dict]:
 
 def _first_available_price(train: dict) -> float | None:
     for s in train.get("seats", []):
-        if not s.get("sold_out") and s.get("price", 0) > 0:
+        if s.get("price") and s["price"] > 0:
             return s["price"]
+    # 有票但未获取到价格，用 0 兜底
+    if train.get("seats"):
+        return 0
     return None
 
 
