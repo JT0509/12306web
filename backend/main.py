@@ -153,7 +153,7 @@ async def search(request: Request):
         raise HTTPException(400, detail={"error": f"未找到到达站「{to_name}」"})
 
     # 查询直达
-    logger.info(f"查询: {from_name}({from_code}) -> {to_name}({to_code}) 日期:{date}")
+    logger.info(f"查询直达: {from_name}({from_code}) -> {to_name}({to_code}) 日期:{date}")
     try:
         direct = query_direct_trains(from_code, to_code, date)
     except RuntimeError as e:
@@ -162,17 +162,18 @@ async def search(request: Request):
         logger.error(f"12306 查询失败: {e}")
         raise HTTPException(503, detail={"error": "12306 查询服务暂不可用，请稍后重试"})
 
-    # 查询中转（如果直达为空或直达少，总是搜中转）
+    # 中转只在 type=transfer 或未指定 type（兼容旧版）时查询
+    query_type = str(body.get("type", "both")).strip()
     transfers = []
-    try:
-        transfers = find_transfers(from_code, to_code, date)
-    except Exception as e:
-        logger.warning(f"中转查询失败: {e}")
+    if query_type in ("both", "transfer"):
+        try:
+            transfers = find_transfers(from_code, to_code, date)
+        except Exception as e:
+            logger.warning(f"中转查询失败: {e}")
 
     # 排序
     if sort_by == "price":
         direct.sort(key=lambda t: _min_price(t))
-        # transfers 已在 route_planner 按价格排序
     elif sort_by == "duration":
         direct.sort(key=lambda t: _duration_key(t))
         transfers.sort(key=lambda t: _duration_key_transfer(t))

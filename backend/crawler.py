@@ -218,6 +218,8 @@ def _parse_train_info(entry: str, date: str) -> Optional[dict]:
     except (ValueError, AttributeError):
         duration = duration_raw
 
+    secret_str = parts[0] if len(parts) > 0 else ""
+
     buy_link = (
         "https://kyfw.12306.cn/otn/leftTicket/init?"
         f"leftTicketDTO.train_date={date}"
@@ -241,6 +243,7 @@ def _parse_train_info(entry: str, date: str) -> Optional[dict]:
         "duration": duration,
         "seats": seats,
         "buy_link": buy_link,
+        "secret_str": secret_str,
     }
 
 
