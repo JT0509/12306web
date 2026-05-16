@@ -45,6 +45,13 @@ node_modules/
 test_automation.py
 screenshot.png
 
+# Screenshots / images
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.bmp
+
 # Misc
 *.tmp
 *.temp
