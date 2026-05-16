@@ -41,6 +41,10 @@ node_modules/
 # Claude internal
 .claude/
 
+# Test
+test_automation.py
+screenshot.png
+
 # Misc
 *.tmp
 *.temp
