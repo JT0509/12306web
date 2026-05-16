@@ -104,21 +104,31 @@ def code_to_station(code: str) -> Optional[str]:
 
 
 def _parse_seat_types(seat_types_str: str) -> list[str]:
-    """解析 seat_types 字段，提取席别代码列表."""
+    """解析 seat_types 字段，提取席别代码。
+    格式如 '90M0O0W0': 每个代码(数字或字母大组)后跟一个数字标志位.
+    """
     codes = []
     i = 0
-    while i < len(seat_types_str):
-        if seat_types_str[i].isdigit():
-            codes.append(seat_types_str[i])
+    chars = list(seat_types_str)
+    while i < len(chars):
+        c = chars[i]
+        if c.isdigit():
+            # 单个数字作为席别代码（如 9=商务座, 1=硬座）
+            codes.append(c)
             i += 1
-            while i < len(seat_types_str) and seat_types_str[i].isdigit():
+            # 跳过紧随的纯数字标志位（通常 1 位）
+            while i < len(chars) and chars[i].isdigit():
                 i += 1
-        elif seat_types_str[i].isalpha():
+        elif c.isalpha():
+            # 字母组作为席别代码（如 M=一等座, O=二等座, WZ=无座）
             code = ""
-            while i < len(seat_types_str) and seat_types_str[i].isalpha():
-                code += seat_types_str[i]
+            while i < len(chars) and chars[i].isalpha():
+                code += chars[i]
                 i += 1
             codes.append(code)
+            # 跳过紧随的数字标志位
+            while i < len(chars) and chars[i].isdigit():
+                i += 1
         else:
             i += 1
     return codes
@@ -198,8 +208,8 @@ def _parse_train_info(
     if not available_codes:
         return None  # 全部售罄，过滤掉
 
-    # 构造 seat_types 参数用于价格查询
-    price_seat_types = "".join(f"{c}0" for c in seat_codes) + "W0"
+    # 构造 seat_types 参数用于价格查询（使用原始格式）
+    price_seat_types = seat_types_str
 
     # 查询价格
     price_map = _query_prices(
