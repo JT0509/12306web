@@ -184,6 +184,18 @@ body {
 }
 .search-btn:hover:not(:disabled) { background: var(--primary-dark); transform: translateY(-1px); }
 .search-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+.cancel-btn {
+    padding: 10px 20px;
+    background: var(--danger);
+    color: #fff;
+    border: none;
+    border-radius: var(--radius-sm);
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+.cancel-btn:hover { filter: brightness(1.15); }
 
 /* Filter Row */
 .filter-row { display: flex; gap: 8px; margin-top: 14px; }

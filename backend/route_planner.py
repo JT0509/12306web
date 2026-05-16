@@ -74,7 +74,7 @@ def _first_available_price(train: dict) -> float | None:
     for s in train.get("seats", []):
         if s.get("price") and s["price"] > 0:
             return s["price"]
-    # 有票但未获取到价格，用 0 兜底
+    # 有席别但价格尚未查询，返回 0 中转仍可展示
     if train.get("seats"):
         return 0
     return None

@@ -13,6 +13,8 @@ from backend.crawler import (
     station_to_code,
     query_direct_trains,
     query_train_detail,
+    query_ticket_price,
+    SEAT_CODE_NAMES,
 )
 from backend.route_planner import find_transfers
 
@@ -221,6 +223,44 @@ async def search_stations(q: str = ""):
     m = load_station_map()
     results = [n for n in m if q in n][:10]
     return {"stations": results}
+
+
+@app.post("/api/price")
+async def get_price(request: Request):
+    """批量查询票价."""
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(400, detail={"error": "参数格式错误"})
+
+    trains = body.get("trains", [])
+    date = str(body.get("date", "")).strip()
+    if not date or not trains:
+        raise HTTPException(400, detail={"error": "参数缺失"})
+
+    results = {}
+    for t in trains[:20]:  # 一次最多 20 趟
+        train_no = t.get("train_no", "")
+        internal_no = t.get("internal_no", "")
+        from_no = t.get("from_no", "")
+        to_no = t.get("to_no", "")
+        seat_types = t.get("seat_types", "")
+        if not internal_no or not from_no or not to_no:
+            continue
+        try:
+            prices = query_ticket_price(
+                internal_no, from_no, to_no, seat_types, date
+            )
+            # 转换键名为中文
+            named = {}
+            for k, v in prices.items():
+                name = SEAT_CODE_NAMES.get(k, k)
+                named[name] = v
+            results[train_no] = named
+        except Exception:
+            results[train_no] = {}
+
+    return {"prices": results}
 
 
 def _min_price(train: dict) -> float:

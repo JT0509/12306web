@@ -170,10 +170,8 @@ def _query_prices(
     return prices
 
 
-def _parse_train_info(
-    entry: str, date: str, client: httpx.Client
-) -> Optional[dict]:
-    """解析单条车次数据，过滤全售罄车次，查询真实票价."""
+def _parse_train_info(entry: str, date: str) -> Optional[dict]:
+    """解析单条车次数据，过滤全售罄车次（不查价格，快速返回）."""
     parts = entry.split("|")
     if len(parts) < 35:
         return None
@@ -192,11 +190,9 @@ def _parse_train_info(
     seat_types_str = parts[34]
     is_high_speed = train_code.startswith(("G", "D", "C"))
 
-    # 解析席别列表
     seat_codes = _parse_seat_types(seat_types_str)
     avail_index = HIGH_SPEED_AVAIL_INDEX if is_high_speed else NORMAL_AVAIL_INDEX
 
-    # 检查哪些席别可用并归类
     available_codes = []
     for code in seat_codes:
         idx = avail_index.get(code)
@@ -206,41 +202,15 @@ def _parse_train_info(
                 available_codes.append(code)
 
     if not available_codes:
-        return None  # 全部售罄，过滤掉
+        return None
 
-    # 构造 seat_types 参数用于价格查询（使用原始格式）
-    price_seat_types = seat_types_str
-
-    # 查询价格
-    price_map = _query_prices(
-        client, internal_no, from_no, to_no, price_seat_types, date
-    )
-
-    # 构造 seats 列表
+    # 只记录席别名称和可用状态，不查价格
     seats = []
     for code in seat_codes:
+        if code not in available_codes:
+            continue
         name = SEAT_CODE_NAMES.get(code, code)
-        idx = avail_index.get(code)
-        available = code in available_codes
-
-        if not available:
-            continue  # 跳过不可用席别
-
-        price = None
-        # 尝试匹配价格键
-        for pk, pv in price_map.items():
-            if pk == code or pk == f"A{code}":
-                price = pv
-                break
-        # 也检查 WZ 的特殊处理
-        if code == "WZ" and "WZ" in price_map:
-            price = price_map["WZ"]
-
-        if price is not None:
-            seats.append({"type": name, "price": round(price, 1)})
-        else:
-            # 有票但未获取到价格（可能查询失败），标记为"见官网"
-            seats.append({"type": name, "note": "见官网"})
+        seats.append({"type": name})
 
     try:
         h, m = duration_raw.split(":")
@@ -263,12 +233,26 @@ def _parse_train_info(
         "to_station": to_station,
         "from_code": from_code,
         "to_code": to_code,
+        "from_no": from_no,
+        "to_no": to_no,
+        "seat_types": seat_types_str,
         "depart_time": start_time,
         "arrive_time": arrive_time,
         "duration": duration,
         "seats": seats,
         "buy_link": buy_link,
     }
+
+
+def query_ticket_price(
+    train_no: str, from_no: str, to_no: str,
+    seat_types: str, date: str,
+) -> dict[str, float]:
+    """查询单趟车次的票价（公共函数，供前端懒加载调用）."""
+    with _client() as client:
+        client.get("https://kyfw.12306.cn/otn/leftTicket/init")
+        time.sleep(random.uniform(0.3, 0.8))
+        return _query_prices(client, train_no, from_no, to_no, seat_types, date)
 
 
 def query_direct_trains(
@@ -296,7 +280,7 @@ def query_direct_trains(
 
         trains = []
         for entry in result:
-            info = _parse_train_info(entry, date, client)
+            info = _parse_train_info(entry, date)
             if info:
                 trains.append(info)
 

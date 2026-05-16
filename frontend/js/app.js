@@ -1,35 +1,34 @@
-/* global fetch, localStorage, setTimeout, clearTimeout, console, window, document */
+/* global fetch, localStorage, AbortController, setTimeout, clearTimeout, console, window, document */
 
 (function() {
     'use strict';
 
-    // ===== 常量 =====
-    const API_BASE = 'http://127.0.0.1:8765';
-    const HISTORY_KEY = 'train_query_history';
-    const MAX_HISTORY = 5;
+    var API_BASE = 'http://127.0.0.1:8765';
+    var HISTORY_KEY = 'train_query_history';
+    var MAX_HISTORY = 5;
+    var abortController = null;   // 用于取消请求
 
-    // ===== DOM 引用 =====
-    const $ = sel => document.querySelector(sel);
-    const $$ = sel => document.querySelectorAll(sel);
+    var $ = function(sel) { return document.querySelector(sel); };
+    var $$ = function(sel) { return document.querySelectorAll(sel); };
 
-    const fromInput = $('#fromInput');
-    const toInput = $('#toInput');
-    const dateInput = $('#dateInput');
-    const searchBtn = $('#searchBtn');
-    const swapBtn = $('#swapBtn');
-    const statusBar = $('#statusBar');
-    const results = $('#results');
-    const filterRow = $('#filterRow');
-    const fromSuggestions = $('#fromSuggestions');
-    const toSuggestions = $('#toSuggestions');
+    var fromInput = $('#fromInput');
+    var toInput = $('#toInput');
+    var dateInput = $('#dateInput');
+    var searchBtn = $('#searchBtn');
+    var cancelBtn = $('#cancelBtn');
+    var swapBtn = $('#swapBtn');
+    var statusBar = $('#statusBar');
+    var results = $('#results');
+    var filterRow = $('#filterRow');
+    var fromSuggestions = $('#fromSuggestions');
+    var toSuggestions = $('#toSuggestions');
 
     // ===== 初始化 =====
     function init() {
-        const tomorrow = new Date();
+        var tomorrow = new Date();
         tomorrow.setDate(tomorrow.getDate() + 1);
         dateInput.min = tomorrow.toISOString().split('T')[0];
         dateInput.value = tomorrow.toISOString().split('T')[0];
-
         loadHistory();
         bindEvents();
     }
@@ -37,6 +36,7 @@
     // ===== 事件绑定 =====
     function bindEvents() {
         searchBtn.addEventListener('click', doSearch);
+        cancelBtn.addEventListener('click', doCancel);
         swapBtn.addEventListener('click', swapStations);
         fromInput.addEventListener('input', debounce(function() { suggestStations(fromInput, fromSuggestions); }, 250));
         toInput.addEventListener('input', debounce(function() { suggestStations(toInput, toSuggestions); }, 250));
@@ -57,6 +57,16 @@
         });
     }
 
+    // ===== 取消操作 =====
+    function doCancel() {
+        if (abortController) {
+            abortController.abort();
+            abortController = null;
+        }
+        setLoading(false);
+        showStatus('已取消', 'warning');
+    }
+
     // ===== 车站建议 =====
     async function suggestStations(input, listEl) {
         var q = input.value.trim();
@@ -66,7 +76,7 @@
             var data = await resp.json();
             renderSuggestions(listEl, data.stations || [], input);
         } catch (e) {
-            console.error('车站搜索失败', e);
+            console.error(e);
         }
     }
 
@@ -92,14 +102,12 @@
         }
     }
 
-    // ===== 交换车站 =====
     function swapStations() {
         var tmp = fromInput.value;
         fromInput.value = toInput.value;
         toInput.value = tmp;
     }
 
-    // ===== 输入校验 =====
     function validateInputs() {
         var ok = true;
         [fromInput, toInput].forEach(function(inp) {
@@ -112,12 +120,16 @@
         return ok;
     }
 
-    // ===== 查询 =====
+    // ===== 查询（可取消） =====
     async function doSearch() {
         if (!validateInputs()) {
             showStatus('请填写出发站和到达站', 'error');
             return;
         }
+
+        // 取消正在进行的操作
+        if (abortController) { abortController.abort(); }
+        abortController = new AbortController();
 
         var from = fromInput.value.trim();
         var to = toInput.value.trim();
@@ -125,43 +137,137 @@
         var sortBy = (document.querySelector('input[name="sort"]:checked') || {}).value || 'price';
 
         setLoading(true);
-        showStatus('正在查询车次信息...', 'loading');
+        showStatus('正在查询车次信息...  <span style="font-size:12px;">(可点取消)</span>', 'loading');
         results.innerHTML = renderSkeletons(3);
+
+        var searchData = null;
 
         try {
             var resp = await fetch(API_BASE + '/api/search', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ from: from, to: to, date: date, sort_by: sortBy }),
+                signal: abortController.signal,
             });
-            var data = await resp.json();
+            searchData = await resp.json();
 
             if (!resp.ok) {
-                showStatus(data.error || '查询失败', 'error');
+                showStatus(searchData.error || '查询失败', 'error');
                 results.innerHTML = '';
+                setLoading(false);
                 return;
             }
-
-            saveHistory({ from: from, to: to, date: date });
-            renderResults(data);
-            filterRow.style.display = (data.direct.length > 0 && data.transfers.length > 0) ? 'flex' : 'none';
-            $$('.filter-btn').forEach(function(b) {
-                b.classList.toggle('active', b.dataset.filter === 'all');
-            });
-
-            var total = data.direct.length + data.transfers.length;
-            if (total === 0) {
-                showStatus('未找到该线路的车次，请尝试调整日期或拆段查询', 'warning');
-            } else {
-                showStatus('找到 ' + data.direct.length + ' 趟直达 + ' + data.transfers.length + ' 个中转方案', 'success');
-            }
         } catch (e) {
-            console.error('查询失败', e);
+            if (e.name === 'AbortError') {
+                // 用户取消，不显示错误
+                setLoading(false);
+                return;
+            }
+            console.error(e);
             showStatus('网络连接失败，请检查后端服务是否已启动', 'error');
             results.innerHTML = '';
-        } finally {
             setLoading(false);
+            return;
         }
+
+        saveHistory({ from: from, to: to, date: date });
+        renderResults(searchData);
+        filterRow.style.display = (searchData.direct.length > 0 && searchData.transfers.length > 0) ? 'flex' : 'none';
+        $$('.filter-btn').forEach(function(b) {
+            b.classList.toggle('active', b.dataset.filter === 'all');
+        });
+
+        var total = searchData.direct.length + searchData.transfers.length;
+        if (total === 0) {
+            showStatus('未找到该线路的车次，请尝试调整日期或拆段查询', 'warning');
+        } else {
+            showStatus('找到 ' + searchData.direct.length + ' 趟直达 + ' + searchData.transfers.length + ' 个中转方案  |  正在获取票价...', 'success');
+        }
+
+        setLoading(false);
+
+        // 异步加载价格（可被新搜索取消）
+        loadPrices(searchData.direct, date);
+    }
+
+    // ===== 异步价格加载 =====
+    async function loadPrices(directTrains, date) {
+        if (!directTrains || directTrains.length === 0) return;
+
+        var trainsForPrice = directTrains.map(function(t) {
+            return {
+                train_no: t.train_no,
+                internal_no: t.internal_no,
+                from_no: t.from_no,
+                to_no: t.to_no,
+                seat_types: t.seat_types,
+            };
+        });
+
+        try {
+            var resp = await fetch(API_BASE + '/api/price', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ trains: trainsForPrice, date: date }),
+                signal: abortController ? abortController.signal : undefined,
+            });
+            var data = await resp.json();
+            var priceMap = data.prices || {};
+
+            // 更新每张车次卡片上的价格
+            directTrains.forEach(function(train) {
+                var prices = priceMap[train.train_no] || {};
+                var card = document.querySelector('.train-card[data-train-no="' + train.train_no + '"]');
+                if (!card) return;
+
+                var seatList = card.querySelector('.seat-list');
+                if (!seatList) return;
+
+                var newHtml = train.seats.map(function(s) {
+                    var p = prices[s.type];
+                    var priceText = p ? '¥' + p : '—';
+                    return '<div class="seat-item"><span class="seat-type">' + escapeHtml(s.type) + '</span><span class="seat-price">' + priceText + '</span></div>';
+                }).join('');
+
+                seatList.innerHTML = newHtml || '<span style="font-size:12px;color:var(--text-secondary);">暂无可选席别</span>';
+
+                // 更新最低价标记
+                updatePriceBadge(train.train_no);
+            });
+
+            showStatus('票价加载完成', 'success');
+        } catch (e) {
+            if (e.name === 'AbortError') return;
+            console.error('价格加载失败', e);
+        }
+    }
+
+    function updatePriceBadge(trainNo) {
+        var cards = $$('.train-card');
+        var bestPrice = Infinity;
+        var bestTrainNo = '';
+
+        cards.forEach(function(card) {
+            var prices = card.querySelectorAll('.seat-price');
+            prices.forEach(function(p) {
+                var v = parseFloat(p.textContent.replace('¥', ''));
+                if (v > 0 && v < bestPrice) {
+                    bestPrice = v;
+                    bestTrainNo = card.dataset.trainNo;
+                }
+            });
+        });
+
+        cards.forEach(function(card) {
+            var badge = card.querySelector('.badge.best-price');
+            if (badge) badge.remove();
+            if (card.dataset.trainNo === bestTrainNo && bestPrice < Infinity) {
+                var header = card.querySelector('.card-header');
+                if (header) {
+                    header.insertAdjacentHTML('afterbegin', '<span class="badge best-price">💡 最实惠</span>');
+                }
+            }
+        });
     }
 
     // ===== 渲染结果 =====
@@ -197,23 +303,18 @@
         var card = document.createElement('div');
         card.className = 'train-card';
         card.dataset.type = 'direct';
+        card.dataset.trainNo = train.train_no;
 
-        // 找最低/最快标记
-        var minPrice = Math.min.apply(null, arr.map(function(t) { return minPriceOf(t); }).filter(function(p) { return p > 0; }));
         var minDur = Math.min.apply(null, arr.map(function(t) { return durMins(t); }));
-        var thisPrice = minPriceOf(train);
         var thisDur = durMins(train);
-
         var badges = '';
-        if (thisPrice > 0 && thisPrice === minPrice) badges += '<span class="badge best-price">💡 最实惠</span>';
         if (thisDur > 0 && thisDur === minDur) badges += '<span class="badge best-time">⚡ 最快</span>';
 
+        // 先显示席别名称，价格显示为加载中
         var seatsHtml = train.seats.map(function(s) {
-            var priceText = s.price ? '¥' + s.price : (s.note || '');
-            return '<div class="seat-item"><span class="seat-type">' + escapeHtml(s.type) + '</span><span class="seat-price">' + escapeHtml(priceText) + '</span></div>';
+            return '<div class="seat-item"><span class="seat-type">' + escapeHtml(s.type) + '</span><span class="seat-price" style="color:var(--text-secondary);">...</span></div>';
         }).join('');
 
-        // 存储内部车次信息供详情查询使用
         var detailParams = encodeURIComponent(JSON.stringify({
             internal_no: train.internal_no || '',
             from_code: train.from_code || '',
@@ -230,10 +331,10 @@
             '</div>' +
             '<div class="seat-list">' + (seatsHtml || '<span style="font-size:12px;color:var(--text-secondary);">暂无可选席别</span>') + '</div>' +
             '<div class="card-actions">' +
-                '<button class="btn btn-detail" data-action="detail" data-train="' + escapeHtml(train.train_no) + '" data-extra="' + escapeHtml(detailParams) + '">📋 查看详情</button>' +
-                '<button class="btn btn-buy" data-action="buy" data-link="' + escapeHtml(train.buy_link) + '">🔗 去官网购买</button>' +
+                '<button class="btn btn-detail" data-action="detail">📋 查看详情</button>' +
+                '<button class="btn btn-buy" data-action="buy">🔗 去官网购买</button>' +
             '</div>' +
-            '<div class="card-detail" data-train-detail="' + escapeHtml(train.train_no) + '"></div>';
+            '<div class="card-detail"></div>';
 
         var detailBtn = card.querySelector('.btn-detail');
         if (detailBtn) {
@@ -277,7 +378,7 @@
             '<div class="card-actions" style="padding-top:8px;">' +
                 '<button class="btn btn-buy" data-action="buy" data-link="https://kyfw.12306.cn/otn/leftTicket/init">🔗 分段购票（去官网）</button>' +
             '</div>' +
-            '<div class="card-detail" data-train-detail="transfer-' + escapeHtml(transfer.transfer_station) + '"></div>';
+            '<div class="card-detail"></div>';
         return card;
     }
 
@@ -296,7 +397,6 @@
         detailEl.innerHTML = '<div class="skeleton-line" style="width:80%;"></div><div class="skeleton-line" style="width:60%;"></div>';
         detailEl.classList.add('show');
 
-        // 构建带车次内部参数的 URL
         var url = API_BASE + '/api/train/' + encodeURIComponent(train.train_no) + '?date=' + encodeURIComponent(date);
         if (train.internal_no) {
             url += '&internal_no=' + encodeURIComponent(train.internal_no);
@@ -324,7 +424,6 @@
         }
     }
 
-    // ===== 跳转购买 =====
     function openBuyLink(e, link) {
         e.stopPropagation();
         try {
@@ -340,7 +439,6 @@
         window.open(link, '_blank', 'noopener');
     }
 
-    // ===== 筛选 =====
     function applyFilter(filter) {
         $$('.train-card, .transfer-card, .section-title').forEach(function(el) {
             if (filter === 'all') { el.style.display = ''; return; }
@@ -349,28 +447,25 @@
         });
     }
 
-    // ===== 骨架屏 =====
     function renderSkeletons(n) {
         return Array(n).fill(0).map(function() {
             return '<div class="skeleton"><div class="skeleton-line" style="width:40%;"></div><div class="skeleton-line" style="width:70%;"></div><div class="skeleton-line"></div></div>';
         }).join('');
     }
 
-    // ===== 状态提示 =====
     function showStatus(msg, type) {
         statusBar.innerHTML = '<div class="status-msg ' + type + '">' + msg + '</div>';
     }
 
-    // ===== 加载态 =====
     function setLoading(loading) {
+        searchBtn.style.display = loading ? 'none' : '';
+        cancelBtn.style.display = loading ? '' : 'none';
         searchBtn.disabled = loading;
-        searchBtn.textContent = loading ? '查询中...' : '🔍 查询';
         fromInput.disabled = loading;
         toInput.disabled = loading;
         dateInput.disabled = loading;
     }
 
-    // ===== 查询历史 =====
     function saveHistory(query) {
         try {
             var history = JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]');
@@ -407,17 +502,11 @@
         } catch (e) { /* ignore */ }
     }
 
-    // ===== 工具函数 =====
     function escapeHtml(str) {
         if (!str) return '';
         var div = document.createElement('div');
         div.textContent = str;
         return div.innerHTML;
-    }
-
-    function minPriceOf(train) {
-        var prices = (train.seats || []).map(function(s) { return s.price || 0; }).filter(function(p) { return p > 0; });
-        return prices.length > 0 ? Math.min.apply(null, prices) : 0;
     }
 
     function durMins(train) {
@@ -436,6 +525,5 @@
         };
     }
 
-    // ===== 启动 =====
     init();
 })();
