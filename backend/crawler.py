@@ -186,3 +186,111 @@ def query_direct_trains(
             trains.append(info)
 
     return trains
+
+
+# ── 车次详情查询 ──────────────────────────────────────────────
+
+TRAIN_DETAIL_URL = "https://kyfw.12306.cn/otn/czxx/queryByTrainNo"
+
+
+def _resolve_train_info(
+    train_no: str, date: str, client: httpx.Client
+) -> tuple[str, str, str]:
+    """Resolve a display train name to internal train_no and station telecodes
+    by searching common routes.  Returns (internal_train_no, from_code, to_code).
+    """
+    # Ensure station map is loaded
+    load_station_map()
+
+    # Common inter-city routes to search
+    common_routes = [
+        ("北京", "上海虹桥"),
+        ("北京南", "上海虹桥"),
+        ("北京南", "上海"),
+        ("北京", "上海"),
+        ("北京南", "杭州东"),
+        ("北京南", "南京南"),
+        ("北京西", "广州南"),
+        ("北京西", "深圳北"),
+        ("上海虹桥", "北京南"),
+        ("上海虹桥", "广州南"),
+        ("上海虹桥", "深圳北"),
+        ("广州南", "深圳北"),
+    ]
+
+    for from_name, to_name in common_routes:
+        fc = station_to_code(from_name)
+        tc = station_to_code(to_name)
+        if not fc or not tc:
+            continue
+        try:
+            params = {
+                "leftTicketDTO.train_date": date,
+                "leftTicketDTO.from_station": fc,
+                "leftTicketDTO.to_station": tc,
+                "purpose_codes": "ADULT",
+            }
+            resp = client.get(QUERY_URL, params=params)
+            resp.raise_for_status()
+            data = resp.json()
+            results = data.get("data", {}).get("result", [])
+            for entry in results:
+                parts = entry.split("|")
+                if len(parts) > 7 and parts[3] == train_no:
+                    return parts[2], parts[6], parts[7]
+        except Exception:
+            continue
+
+    raise ValueError(
+        f"无法解析车次 {train_no}。请尝试提供 from_station_telecode 和 "
+        f"to_station_telecode 参数。"
+    )
+
+
+def query_train_detail(
+    train_no: str,
+    date: str,
+    from_station_telecode: str = "",
+    to_station_telecode: str = "",
+) -> dict:
+    """查询车次经停站详情.
+
+    参数:
+        train_no: 车次显示名称，如 G1
+        date: 发车日期，格式 yyyy-MM-dd
+        from_station_telecode: 发站电报码，可选。如不提供则自动查找。
+        to_station_telecode: 到站电报码，可选。如不提供则自动查找。
+    """
+    with _client() as client:
+        # 访问 init 页面获取 Cookie
+        client.get("https://kyfw.12306.cn/otn/leftTicket/init")
+        time.sleep(random.uniform(0.3, 0.8))
+
+        internal_no = train_no
+
+        # 如果缺少电报码，尝试通过查询车次列表来解析
+        if not from_station_telecode or not to_station_telecode:
+            internal_no, from_station_telecode, to_station_telecode = (
+                _resolve_train_info(train_no, date, client)
+            )
+
+        params = {
+            "train_no": internal_no,
+            "from_station_telecode": from_station_telecode,
+            "to_station_telecode": to_station_telecode,
+            "depart_date": date,
+        }
+        resp = client.get(TRAIN_DETAIL_URL, params=params)
+        resp.raise_for_status()
+        data = resp.json()
+
+    raw_stations = data.get("data", {}).get("data", [])
+    route = []
+    for s in raw_stations:
+        route.append({
+            "station": s.get("station_name", ""),
+            "arrive": s.get("arrive_time", "—") or "—",
+            "depart": s.get("start_time", "—") or "—",
+        })
+
+    return {"train_no": train_no, "route": route}
