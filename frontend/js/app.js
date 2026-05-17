@@ -259,8 +259,9 @@
             '<div class="card-actions" style="padding-top:8px;">' +
                 '<button class="btn btn-buy">🔗 分段购票（去官网）</button></div>' +
             '<div class="card-detail"></div>';
+        var seg1Link = (t.segments[0] && t.segments[0].search_link) || 'https://kyfw.12306.cn/otn/leftTicket/init?linktypeid=dc';
         card.querySelector('.btn-buy').addEventListener('click', function(e) {
-            openBuy(e, { buy_link: 'https://kyfw.12306.cn/otn/leftTicket/init' });
+            openBuy(e, { buy_link: seg1Link, train_no: (t.segments[0] || {}).train_no || '' });
         });
         return card;
     }
@@ -292,13 +293,13 @@
         dCtrl = null;
     }
 
-    // ===== 购买跳转 =====
+    // ===== 购买跳转：直接打开 12306 查询页（参数预填），用户点「预订」即可购票 =====
+    // 12306 对跨域表单 POST（submitOrderRequest）有 CSRF 保护，无法从第三方页面直接提交
     function openBuy(e, train) {
         e.stopPropagation();
-        var link = train.buy_link || 'https://kyfw.12306.cn/otn/leftTicket/init';
-        try { var u = new URL(link); if (u.hostname.indexOf('12306.cn') === -1) { statMsg('链接无效', 'error'); return; } } catch (er) { statMsg('链接无效', 'error'); return; }
+        var link = train.buy_link || train.search_link || 'https://kyfw.12306.cn/otn/leftTicket/init?linktypeid=dc';
         window.open(link, '_blank', 'noopener');
-        statMsg('已打开 12306 查询页（已预填出发/到达/日期），在列表中找到 <b>' + esc(train.train_no) + '</b> 点击"预订"即可购票', 'success');
+        statMsg('已打开 12306 查询页<br>请找到车次 <b>' + esc(train.train_no || '') + '</b> 点击「预订」即可进入购票<br>如未登录请先 <a href="https://kyfw.12306.cn/otn/login/init" target="_blank">登录 12306</a>', 'success');
     }
 
     function applyF(filter) {

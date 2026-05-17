@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>正在跳转到 12306 购票页面...</title>
+<style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Microsoft YaHei", sans-serif; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; background: #f5f5f5; }
+    .box { background: white; padding: 32px 48px; border-radius: 12px; box-shadow: 0 2px 16px rgba(0,0,0,.08); text-align: center; max-width: 400px; }
+    .spinner { width: 36px; height: 36px; border: 3px solid #e0e0e0; border-top-color: #1976d2; border-radius: 50%; animation: spin .8s linear infinite; margin: 0 auto 16px; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    h2 { font-size: 18px; color: #333; margin: 0 0 8px; }
+    p { font-size: 14px; color: #888; margin: 0 0 12px; }
+    .hint { font-size: 12px; color: #aaa; background: #fafafa; padding: 12px; border-radius: 8px; line-height: 1.6; margin-top: 16px; }
+    .error { color: #e53935; }
+    a { color: #1976d2; }
+</style>
+</head>
+<body>
+<div class="box" id="box">
+    <div class="spinner" id="spinner"></div>
+    <h2 id="title">正在获取购票密钥...</h2>
+    <p id="info"></p>
+    <div class="hint" id="hint">
+        正在向 12306 查询最新车次信息<br>
+        请确保已在浏览器中<a href="https://kyfw.12306.cn/otn/login/init" target="_blank">登录 12306</a>
+    </div>
+</div>
+<form id="f" action="https://kyfw.12306.cn/otn/leftTicket/submitOrderRequest" method="POST">
+    <input type="hidden" name="secretStr" id="s">
+    <input type="hidden" name="train_date" id="td">
+    <input type="hidden" name="back_train_date" id="bd">
+    <input type="hidden" name="tour_flag" value="dc">
+    <input type="hidden" name="purpose_codes" value="ADULT">
+    <input type="hidden" name="query_from_station_name" id="fs">
+    <input type="hidden" name="query_to_station_name" id="ts">
+    <input type="hidden" name="undefined" value="">
+</form>
+<script>
+(function() {
+    var API = 'http://127.0.0.1:8765';
+    var p = new URLSearchParams(location.hash.slice(1));
+    var fromCode = decodeURIComponent(p.get('from_code') || '');
+    var toCode = decodeURIComponent(p.get('to_code') || '');
+    var date = decodeURIComponent(p.get('date') || '');
+    var trainNo = decodeURIComponent(p.get('trainNo') || '');
+    var fromStation = decodeURIComponent(p.get('from') || '');
+    var toStation = decodeURIComponent(p.get('to') || '');
+
+    var spinner = document.getElementById('spinner');
+    var title = document.getElementById('title');
+    var info = document.getElementById('info');
+    var hint = document.getElementById('hint');
+
+    info.textContent = trainNo + ' | ' + fromStation + ' → ' + toStation + ' | ' + date;
+
+    function fail(msg) {
+        spinner.style.display = 'none';
+        title.textContent = '跳转失败';
+        title.className = 'error';
+        info.textContent = msg;
+        hint.innerHTML = '请返回重新查询，或直接访问 <a href="https://kyfw.12306.cn/otn/leftTicket/init?linktypeid=dc" target="_blank">12306 查询页</a> 手动搜索';
+    }
+
+    if (!fromCode || !toCode || !date || !trainNo) {
+        fail('缺少必要参数');
+        return;
+    }
+
+    // 第一步：向后端请求最新 secretStr
+    fetch(API + '/api/fresh-secret', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ from_code: fromCode, to_code: toCode, date: date, train_no: trainNo })
+    }).then(function(r) {
+        if (!r.ok) return r.json().then(function(e) { throw new Error(e.error || '查询失败'); });
+        return r.json();
+    }).then(function(data) {
+        if (!data.secret_str) throw new Error('未获取到购票密钥');
+
+        title.textContent = '正在跳转到 12306 购票页...';
+        hint.innerHTML = '密钥已获取，正在提交订单...<br>请确保已在浏览器中<a href="https://kyfw.12306.cn/otn/login/init" target="_blank">登录 12306</a>';
+
+        // 第二步：提交到 12306
+        document.getElementById('s').value = data.secret_str || '';
+        document.getElementById('td').value = date;
+        document.getElementById('bd').value = date;
+        document.getElementById('fs').value = data.from_station || fromStation;
+        document.getElementById('ts').value = data.to_station || toStation;
+
+        setTimeout(function() { document.getElementById('f').submit(); }, 500);
+    }).catch(function(e) {
+        fail(e.message || '网络错误');
+    });
+})();
+</script>
+</body>
+</html>

@@ -4,6 +4,7 @@ import re
 import time
 import random
 from typing import Optional
+from urllib.parse import quote
 
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
@@ -139,13 +140,14 @@ def _query_prices(
     seat_types: str, date: str
 ) -> dict[str, float]:
     """查询票价，返回 {席别代码: 价格(元)}."""
+    # 价格 API 要求纯席别代码（不带数字标志位），否则只返回部分价格
+    clean_codes = "".join(_parse_seat_types(seat_types))
     try:
-        time.sleep(random.uniform(0.3, 0.8))
         params = {
             "train_no": train_no,
             "from_station_no": from_no,
             "to_station_no": to_no,
-            "seat_types": seat_types,
+            "seat_types": clean_codes,
             "train_date": date,
         }
         resp = client.get(PRICE_URL, params=params)
@@ -156,17 +158,25 @@ def _query_prices(
         return {}
 
     prices = {}
-    # 解析每个席别代码对应的价格（单位：角，需 /10 转元）
+    # 12306 价格 API 返回值可能有多种格式：¥933.5、9330（角）、933.5 等
     for key, val in data.items():
         if key in ("train_no", "OT"):
+            continue
+        if not val:
             continue
         if isinstance(val, str) and val.startswith("¥"):
             try:
                 prices[key] = float(val.replace("¥", ""))
             except ValueError:
                 pass
-        elif val and val.isdigit():
-            prices[key] = float(val) / 10.0
+        elif isinstance(val, str):
+            try:
+                v = float(val)
+                prices[key] = v if "." in val else v / 10.0
+            except ValueError:
+                pass
+        elif isinstance(val, (int, float)):
+            prices[key] = float(val)
     return prices
 
 
@@ -226,13 +236,16 @@ def _parse_train_info(entry: str, date: str, passenger_count: int = 1) -> Option
 
     secret_str = parts[0] if len(parts) > 0 else ""
 
-    buy_link = (
-        "https://kyfw.12306.cn/otn/leftTicket/init?"
-        f"leftTicketDTO.train_date={date}"
-        f"&leftTicketDTO.from_station={from_code}"
-        f"&leftTicketDTO.to_station={to_code}"
-        "&purpose_codes=ADULT"
+    # 购买链接：直接打开 12306 查询页（参数预填），用户点「预订」即可购票
+    # 跨域表单 POST 到 submitOrderRequest 会被 12306 CSRF 保护拦截
+    from_param = quote(f"{from_code},{from_station}")
+    to_param = quote(f"{to_code},{to_station}")
+    search_link = (
+        "https://kyfw.12306.cn/otn/leftTicket/init?linktypeid=dc"
+        f"&fs={from_param}&ts={to_param}"
+        f"&date={date}&flag=N,N,Y&purpose_codes=ADULT"
     )
+    buy_link = search_link
 
     return {
         "train_no": train_code,
@@ -249,6 +262,7 @@ def _parse_train_info(entry: str, date: str, passenger_count: int = 1) -> Option
         "duration": duration,
         "seats": seats,
         "buy_link": buy_link,
+        "search_link": search_link,
         "secret_str": secret_str,
     }
 
@@ -260,7 +274,6 @@ def query_ticket_price(
     """查询单趟车次的票价（公共函数，供前端懒加载调用）."""
     with _client() as client:
         client.get("https://kyfw.12306.cn/otn/leftTicket/init")
-        time.sleep(random.uniform(0.3, 0.8))
         return _query_prices(client, train_no, from_no, to_no, seat_types, date)
 
 
@@ -270,7 +283,6 @@ def query_direct_trains(
     """查询直达车次，过滤全售罄和余票不足车次."""
     with _client() as client:
         client.get("https://kyfw.12306.cn/otn/leftTicket/init")
-        time.sleep(random.uniform(0.5, 1.5))
 
         params = {
             "leftTicketDTO.train_date": date,

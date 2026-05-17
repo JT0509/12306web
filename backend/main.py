@@ -122,6 +122,7 @@ async def search(request: Request):
     date = str(body.get("date", "")).strip()
     sort_by = str(body.get("sort_by", "price")).strip()
     passenger_count = int(body.get("passengers", 1) or 1)
+    query_type = str(body.get("type", "both")).strip()  # 提前取值，cache_key 要用
 
     # 输入校验
     if not from_name or not to_name or not date:
@@ -164,7 +165,6 @@ async def search(request: Request):
         raise HTTPException(503, detail={"error": "12306 查询服务暂不可用，请稍后重试"})
 
     # 中转只在 type=transfer 或未指定 type（兼容旧版）时查询
-    query_type = str(body.get("type", "both")).strip()
     transfers = []
     if query_type in ("both", "transfer"):
         try:
@@ -177,7 +177,8 @@ async def search(request: Request):
         direct.sort(key=lambda t: _min_price(t))
     elif sort_by == "duration":
         direct.sort(key=lambda t: _duration_key(t))
-        transfers.sort(key=lambda t: _duration_key_transfer(t))
+        if transfers:
+            transfers.sort(key=lambda t: _duration_key_transfer(t))
     elif sort_by == "departure":
         direct.sort(key=lambda t: t.get("depart_time", "99:99"))
 
@@ -229,7 +230,7 @@ async def search_stations(q: str = ""):
 
 @app.post("/api/price")
 async def get_price(request: Request):
-    """批量查询票价."""
+    """批量查询票价（并行查询，大幅加速）."""
     try:
         body = await request.json()
     except Exception:
@@ -240,29 +241,67 @@ async def get_price(request: Request):
     if not date or not trains:
         raise HTTPException(400, detail={"error": "参数缺失"})
 
-    results = {}
-    for t in trains[:20]:  # 一次最多 20 趟
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    def _query_one(t):
         train_no = t.get("train_no", "")
         internal_no = t.get("internal_no", "")
         from_no = t.get("from_no", "")
         to_no = t.get("to_no", "")
         seat_types = t.get("seat_types", "")
         if not internal_no or not from_no or not to_no:
-            continue
+            return train_no, {}
         try:
             prices = query_ticket_price(
                 internal_no, from_no, to_no, seat_types, date
             )
-            # 转换键名为中文
             named = {}
             for k, v in prices.items():
                 name = SEAT_CODE_NAMES.get(k, k)
                 named[name] = v
-            results[train_no] = named
+            return train_no, named
         except Exception:
-            results[train_no] = {}
+            return train_no, {}
+
+    results = {}
+    with ThreadPoolExecutor(max_workers=6) as executor:
+        futures = {executor.submit(_query_one, t): t for t in trains[:20]}
+        for future in as_completed(futures):
+            key, prices = future.result()
+            results[key] = prices
 
     return {"prices": results}
+
+
+@app.post("/api/fresh-secret")
+async def fresh_secret(request: Request):
+    """点击购买时重新查询该车次，获取未过期的 secretStr."""
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(400, detail={"error": "参数格式错误"})
+
+    from_code = str(body.get("from_code", "")).strip()
+    to_code = str(body.get("to_code", "")).strip()
+    date = str(body.get("date", "")).strip()
+    train_no = str(body.get("train_no", "")).strip()
+    if not from_code or not to_code or not date or not train_no:
+        raise HTTPException(400, detail={"error": "参数缺失"})
+
+    try:
+        trains = query_direct_trains(from_code, to_code, date, 1)
+    except Exception as e:
+        raise HTTPException(503, detail={"error": str(e)})
+
+    for t in trains:
+        if t["train_no"] == train_no:
+            return {
+                "secret_str": t["secret_str"],
+                "train_no": train_no,
+                "from_station": t["from_station"],
+                "to_station": t["to_station"],
+            }
+    raise HTTPException(404, detail={"error": f"未找到车次 {train_no}"})
 
 
 def _min_price(train: dict) -> float:
